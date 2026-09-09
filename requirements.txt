@@ -1,0 +1,7 @@
+# 运行时依赖
+PySide6>=6.11,<7
+requests>=2.32
+
+# 开发/打包依赖
+PyInstaller>=6.10
+pytest>=8
