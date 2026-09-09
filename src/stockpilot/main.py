@@ -106,6 +106,9 @@ def app_main() -> None:
     args = parser.parse_args()
     setup_logging()
 
+    from .crashguard import install as install_crashguard
+    install_crashguard()          # 闪退防线：未捕获异常/Qt fatal 全部落 crash.log
+
     if args.smoke:
         sys.exit(smoke())
 

@@ -6,8 +6,9 @@ import webbrowser
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox,
                                QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QMessageBox, QPushButton, QScrollArea,
-                               QSpinBox, QVBoxLayout, QWidget)
+                               QLineEdit, QMessageBox, QPlainTextEdit,
+                               QPushButton, QScrollArea, QSpinBox, QTabWidget,
+                               QVBoxLayout, QWidget)
 
 from ...core import notify as notify_mod
 from .. import kit
@@ -43,7 +44,8 @@ class SettingsPage(QWidget):
                 ("行情与界面", "行情与界面"),
                 ("消息通知", "消息通知"),
                 ("应用", "常驻与提醒"),
-                ("机会推荐", "机会推荐")):
+                ("机会推荐", "机会推荐"),
+                ("运行日志", "运行日志")):
             b = QPushButton(label)
             b.setProperty("secondary", True)
             b.setFixedHeight(30)
@@ -169,6 +171,38 @@ class SettingsPage(QWidget):
         clay.addWidget(opp_box)
         self._group_box_map['机会推荐'] = opp_box
 
+        # ---- 运行日志查看器（v7.2.1：闪退可查）----
+        log_box = QGroupBox("运行日志（闪退/报错排查：crash.log 记录全部未捕获异常）")
+        lv = QGridLayout(log_box)
+        self.log_tabs = QTabWidget()
+        self.log_view_crash = QPlainTextEdit()
+        self.log_view_crash.setReadOnly(True)
+        self.log_view_crash.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.log_view_app = QPlainTextEdit()
+        self.log_view_app.setReadOnly(True)
+        self.log_view_app.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.log_tabs.addTab(self.log_view_crash, "崩溃日志 crash.log")
+        self.log_tabs.addTab(self.log_view_app, "运行日志 app.log（最近 500 行）")
+        lv.addWidget(self.log_tabs, 0, 0, 1, 3)
+        log_open_btn = QPushButton("打开日志目录")
+        log_open_btn.setProperty("secondary", True)
+        from ...core.storage import data_dir as _dd
+        log_open_btn.clicked.connect(
+            lambda: webbrowser.open(str(_dd() / "logs")))
+        refresh_log_btn = QPushButton("刷新")
+        refresh_log_btn.setProperty("secondary", True)
+        refresh_log_btn.clicked.connect(self.load_logs)
+        clear_crash_btn = QPushButton("清空崩溃日志")
+        clear_crash_btn.setProperty("danger", True)
+        clear_crash_btn.setToolTip("清空 crash.log（清除历史崩溃记录，不影响运行）")
+        clear_crash_btn.clicked.connect(self._clear_crash_log)
+        lv.addWidget(log_open_btn, 1, 0)
+        lv.addWidget(refresh_log_btn, 1, 1)
+        lv.addWidget(clear_crash_btn, 1, 2)
+        clay.addWidget(log_box)
+        self._group_box_map['运行日志'] = log_box
+        self.load_logs()
+
         bar = QHBoxLayout()
         save_btn = QPushButton("保存设置")
         save_btn.clicked.connect(self._save)
@@ -186,6 +220,35 @@ class SettingsPage(QWidget):
         clay.addStretch(1)
         self._scroll.setWidget(content)
         lay.addWidget(self._scroll, 1)
+
+    def load_logs(self) -> None:
+        """读取 crash.log 全文 + app.log 末 500 行（查闪退就是查这两个）。"""
+        from ...core.storage import data_dir
+        logs = data_dir() / "logs"
+        crash = logs / "crash.log"
+        self.log_view_crash.setPlainText(
+            crash.read_text(encoding="utf-8", errors="replace")
+            if crash.exists() else "（暂无崩溃记录 —— 程序运行正常）")
+        applog = logs / "app.log"
+        if applog.exists():
+            try:
+                with open(applog, encoding="utf-8", errors="replace") as f:
+                    tail = f.readlines()[-500:]
+                self.log_view_app.setPlainText("".join(tail))
+            except OSError:
+                self.log_view_app.setPlainText("（app.log 读取失败）")
+        else:
+            self.log_view_app.setPlainText("（暂无 app.log）")
+
+    def _clear_crash_log(self) -> None:
+        from ...core.storage import data_dir
+        crash = data_dir() / "logs" / "crash.log"
+        try:
+            crash.write_text("", encoding="utf-8")
+        except OSError:
+            QMessageBox.warning(self, "提示", "清空失败（日志文件被占用？）")
+            return
+        self.load_logs()
 
     def _scroll_to(self, group: str) -> None:
         """分类导航：滚动到对应分组（§17 分类定位）。"""

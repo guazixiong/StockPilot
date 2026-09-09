@@ -101,6 +101,36 @@ def build_screener_context(rows: List[dict], top: int = 15) -> str:
             f"{_f(r.get('volume_ratio'))} {_f(r.get('pe'))} {_f(r.get('float_mv'), 0)}")
     return "\n".join(lines)
 
+def build_compare_context(stocks: List[dict]) -> str:
+    """多股对比上下文：stocks 由 UI 层按同一口径准备，
+    每项 {code,name,quote:Quote,ind:dict} —— 同源同字段，AI 可直接横向对照。"""
+    parts = [f"【多股对比】共 {len(stocks)} 只（同口径数据，可直接横向比较）"]
+    for s in stocks:
+        q = s.get("quote")
+        ind = s.get("ind") or {}
+        if q is None:
+            parts.append(f"\n〔{s.get('code')} {s.get('name','')}〕行情数据不可用，"
+                         "请仅基于其余股票分析并在开头说明。")
+            continue
+        parts.append(
+            f"\n〔{s['code']} {s.get('name') or q.name}〕\n"
+            f"现价 {_f(q.price)} 涨跌 {_f(q.change_pct, 2, '%')} "
+            f"振幅 {_f(q.amplitude, 2, '%')}  换手 {_f(q.turnover_rate, 2, '%')} "
+            f"量比 {_f(q.volume_ratio)}\n"
+            f"今开 {_f(q.open)} 昨收 {_f(q.prev_close)} "
+            f"最高 {_f(q.high)} 最低 {_f(q.low)}\n"
+            f"主力净流入 {_f(q.main_inflow, 0, '万')}  成交额 {_f(q.amount, 0, '万')}\n"
+            f"PE {_f(q.pe)} PB {_f(q.pb)} 流通市值 {_f(q.float_mv, 0, '亿')}\n"
+            "技术: " + "；".join(
+                f"{k.upper()}={_f(ind.get(k))}"
+                for k in ("ma5", "ma10", "ma20", "ma60", "dif", "dea",
+                          "macd_hist", "rsi6", "k", "d", "j",
+                          "boll_up", "boll_mid", "boll_low")))
+        forms = signals_text(ind)
+        if forms:
+            parts[-1] += "\n形态: " + "；".join(forms)
+    return "\n".join(parts)
+
 
 # ---------------------------------------------------------------- 模板
 
@@ -117,6 +147,13 @@ TEMPLATES: Dict[str, str] = {
     "选股解读":
         "以下是条件选股结果列表。请逐只给出一句点评，并按关注度排序，"
         "指出最值得深入研究的2~3只及原因。\n\n{context}\n\n{question}",
+    "AI对比":
+        "以下是对多只股票的同口径对比数据。请：\n"
+        "1) 先给一张对比总表（趋势强度/量能/估值/风险 各维度用 高中低 或具体值）；\n"
+        "2) 逐只一句话点评核心优劣势；\n"
+        "3) 按\"当前更值得关注\"排序并说明理由；\n"
+        "4) 给出组合建议（若只买一只选谁、分几批、止损位；若组合配置给比例）。\n"
+        "必须点明每只的主要风险，不许只报喜。\n\n{context}\n\n{question}",
     "新闻解读":
         "请解读以下消息对相关股票的可能影响（方向、力度、持续性）以及应对思路。\n\n{context}\n\n{question}",
     "自由问答":

@@ -339,6 +339,7 @@ class MainWindow(QMainWindow):
 
         # ---- 页面联动 ----
         self.market.open_stock.connect(self._open_detail)
+        self.market.ask_ai.connect(self._goto_ai)
         self.home.open_stock.connect(self._open_detail)
         self.boards.open_stock.connect(self._open_detail)
         self.limitup.open_stock.connect(self._open_detail)

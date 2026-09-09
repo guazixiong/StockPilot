@@ -79,6 +79,7 @@ class IndexCard(QFrame):
 class MarketPage(QWidget):
     open_stock = Signal(str, str)
     today_advice = Signal(str, str)
+    ask_ai = Signal(str, str)
 
     COLS = ["代码", "名称", "现价", "涨跌幅", "涨跌额", "今开", "最高",
             "最低", "换手%", "量比", "PE", "总市值(亿)"]
@@ -150,11 +151,15 @@ class MarketPage(QWidget):
         from ..transfer import save_template as _tpl
         tpl_btn.clicked.connect(
             lambda: self._notice(_tpl(self, "watchlist")))
+        cmp_btn = QPushButton("AI 对比")
+        cmp_btn.setToolTip("多选自选/输入代码，一次让 AI 横向对比（趋势/量能/估值/风险）")
+        cmp_btn.clicked.connect(self.open_compare)
         s_lay.addWidget(self.search_edit, 1)
         s_lay.addWidget(btn)
         s_lay.addWidget(imp_btn)
         s_lay.addWidget(exp_btn)
         s_lay.addWidget(tpl_btn)
+        s_lay.addWidget(cmp_btn)
         lay.addWidget(search_card)
 
         self.suggest_list = QListWidget()
@@ -279,6 +284,13 @@ class MarketPage(QWidget):
             self._notify(f"{code} 已在自选中")
 
     # ------------------------------------------------------------ 导入导出
+    def open_compare(self) -> None:
+        """AI 多股对比：勾选自选/添加代码 → ask_ai 跳 AI 分析页流式输出。"""
+        from ..compare_dialog import CompareDialog
+        dlg = CompareDialog(self.ctx, self.ctx.cfg.get_watchlist(), self)
+        dlg.ask_ai.connect(self.ask_ai)
+        dlg.exec()
+
     def _import_watch(self) -> None:
         from ..transfer import import_watchlist
         ok, msg = import_watchlist(self, self.ctx.cfg)
