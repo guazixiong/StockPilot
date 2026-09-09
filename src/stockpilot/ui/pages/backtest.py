@@ -373,7 +373,7 @@ class BacktestPage(QWidget):
             "background:#0A1A30;color:#EAF2FF;border:none;padding:10px;}")
         html = ("<pre style='line-height:1.7'>" + chr(10).join(lines[:30])
                 + "</pre><br><div style='color:#8FA9C7'>" + report.summary()
-                + "</div><div style='color:#6b7383;font-size:8pt;margin-top:8px'>"
+                + "</div><div style='color:#6F86A2;font-size:8pt;margin-top:8px'>"
                   "基于历史数据回测，过往表现不代表未来收益 · 分批建仓/滑点/最低佣金已计入"
                   "</div>")
         view.setHtml(html)
