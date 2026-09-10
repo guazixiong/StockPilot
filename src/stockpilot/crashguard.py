@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,11 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _SEP = "\n" + "=" * 72 + "\n"
+
+# v7.2.7：同一异常签名在冷却期内只弹一次窗（递归型异常——如每次
+# mouseMove 都抛——会无限叠弹窗，用户点掉一个又弹一个）。落盘/日志不省略。
+_DLG_COOLDOWN = 30.0
+_last_dlg: tuple[str, float] | None = None
 
 
 def _crash_path() -> Path:
@@ -53,19 +59,28 @@ def write_crash(kind: str, exc: BaseException | None = None,
 
 def _py_hook(tp, val, tb) -> None:
     """主线程未捕获异常：写 crash.log + 日志 + 尽力弹窗（替代直接闪退）。"""
+    global _last_dlg
     write_crash("未捕获异常(主线程)", exc=val)
     logging.getLogger("crash").critical(
         "未捕获异常(主线程): %s", "".join(
             traceback.format_exception(tp, val, tb))[:2000])
-    # 应用还能弹窗时给用户一个看得见的报错（而不是无声闪退）
+    # v7.2.7：同一 (类型, 消息) 30 秒内只弹一次——缺陷①实况是每次鼠标
+    # 移动都触发同一 AttributeError，弹窗点掉一个又弹一个刷屏。崩溃仍
+    # 全量落盘，只是不再反复打扰。
     try:
-        from PySide6.QtWidgets import QApplication, QMessageBox
-        if QApplication.instance() is not None:
-            QMessageBox.critical(
-                None, "StockPilot 遇到错误",
-                f"程序遇到未处理的错误（已记录到日志，可到 设置→运行日志 查看）：\n\n"
-                f"{tp.__name__}: {val}\n\n"
-                f"崩溃详情已写入 crash.log。点 OK 后程序可能继续运行或退出。")
+        key = f"{tp.__name__}:{val}"
+        now = time.monotonic()
+        if _last_dlg is None or (key != _last_dlg[0]
+                                 or now - _last_dlg[1] > _DLG_COOLDOWN):
+            _last_dlg = (key, now)
+            # 应用还能弹窗时给用户一个看得见的报错（而不是无声闪退）
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            if QApplication.instance() is not None:
+                QMessageBox.critical(
+                    None, "StockPilot 遇到错误",
+                    f"程序遇到未处理的错误（已记录到日志，可到 设置→运行日志 查看）：\n\n"
+                    f"{tp.__name__}: {val}\n\n"
+                    f"崩溃详情已写入 crash.log。点 OK 后程序可能继续运行或退出。")
     except Exception:  # noqa: BLE001
         pass
     _orig_py_hook(tp, val, tb)
@@ -93,8 +108,11 @@ _orig_qt_handler = None
 def install() -> None:
     """装上三道防线。幂等（重复安装无副作用）。"""
     global _orig_py_hook, _orig_qt_handler
-    _orig_py_hook = sys.excepthook
-    sys.excepthook = _py_hook
+    # v7.2.7：二次安装不得把已装上的 _py_hook 记成"原钩子"——否则
+    # 异常链 _py_hook→_orig→_py_hook… 无限自递归（RecursionError）。
+    if sys.excepthook is not _py_hook:
+        _orig_py_hook = sys.excepthook
+        sys.excepthook = _py_hook
     threading.excepthook = _thread_hook
     try:
         from PySide6.QtCore import qInstallMessageHandler

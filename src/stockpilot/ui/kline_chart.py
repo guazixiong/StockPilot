@@ -43,6 +43,11 @@ class CandleChart(QWidget):
         self.sub_modes: list = ["MACD"]              # 副图指标（v5.2 多选堆叠）
         self.cyq: Optional[Tuple[list, list]] = None  # 筹码分布 (prices, weights)
         self._py_hi = self._py_lo = 0.0
+        # v7.2.7：价格→y 换算状态（paintEvent 每帧写入，mouseMoveEvent 读取）。
+        # 缺陷①③根因：换算曾是 paintEvent 内的局部闭包，鼠标悬停代码误调
+        # self._py() → AttributeError 每次移动都抛（弹窗刷屏，crash.log 实锤）。
+        self._py_top = 0
+        self._py_h = 0
 
     # ------------------------------------------------------------ 数据
     def set_data(self, klines: List[KLine], levels: Optional[Dict[str, float]] = None,
@@ -80,6 +85,17 @@ class CandleChart(QWidget):
         self.update()
 
     # ------------------------------------------------------------ 交互
+    def _py(self, price: float) -> float:
+        """价格→绘图区 y 坐标（状态由 paintEvent 每帧刷新）。
+
+        v7.2.7：mouseMoveEvent 悬停命中检测依赖此换算；首次绘制前
+        （_py_h=0）返回 NaN 使命中检测自然不触发，不抛异常。"""
+        if self._py_h <= 0:
+            return float("nan")
+        hi_v, lo_v = self._py_hi, self._py_lo
+        span = (hi_v - lo_v) or 1.0
+        return self._py_top + (hi_v - price) / span * self._py_h
+
     def mouseMoveEvent(self, ev) -> None:  # noqa: N802
         if self.klines:
             x, y = ev.position().x(), ev.position().y()
@@ -177,9 +193,10 @@ class CandleChart(QWidget):
             hi_v = lo_v * 1.02 + 0.01
         span = hi_v - lo_v
         self._py_hi, self._py_lo = hi_v, lo_v
+        self._py_top, self._py_h = price_top, price_h
 
         def py(price: float) -> float:
-            return price_top + (hi_v - price) / span * price_h
+            return self._py(price)
 
         step = plot_w / n
         body_w = max(step * 0.62, 1.5)
