@@ -22,3 +22,5 @@ tmp/probe_*.py
 tmp/shot_*.py
 tmp/mini_review.py
 tmp/diff_v722.txt
+tmp/unz2/
+tmp/pkg2/
