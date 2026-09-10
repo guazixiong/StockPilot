@@ -211,12 +211,15 @@ class HomePage(QWidget):
         ch_body.addLayout(ct)
         from ..kline_chart import CandleChart
         self.chart = CandleChart()
-        self.chart.setMinimumHeight(280)
+        # v7.2.4：首页 K 线压缩（详细图在行情/详情页看），把纵向空间
+        # 让给机会流 —— 此前图表最小高 430px 把中栏顶死，机会区只剩 1 张卡
+        self.chart.setMinimumHeight(240)
         ch_body.addWidget(self.chart, 1)
         chart_card.body_lay.addLayout(ch_body)
-        cv.addWidget(chart_card, 5)
+        cv.addWidget(chart_card, 3)
 
-        # 今日机会（保留机会雷达核心功能）
+        # 今日机会（保留机会雷达核心功能；v7.2.4 布局调整：中栏纵向配额
+        # 向机会区倾斜 3:6:1——此前 5:4:2 一屏只能看到 1 张卡，用户反馈拥挤）
         opp = kit.panel("今日机会", sub="策略扫描 · 按机会分降序", more="")
         op_body = QVBoxLayout()
         op_body.setContentsMargins(8, 4, 8, 8)
@@ -239,16 +242,17 @@ class HomePage(QWidget):
         self.flow.add_watch.connect(self._watch_from_flow)
         op_body.addWidget(self.flow, 1)
         opp.body_lay.addLayout(op_body)
-        cv.addWidget(opp, 4)
+        cv.addWidget(opp, 6)
         self._update_opp_info()
 
-        # 7×24 快讯
+        # 7×24 快讯（v7.2.4：压缩为单行滚动条，把纵向空间让给机会区）
         news = kit.panel("7×24 快讯", more="双击 AI 解读 ›")
         self.news_list = QListWidget()
-        self.news_list.setFixedHeight(96)
+        self.news_list.setFixedHeight(54)
+        self.news_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.news_list.itemDoubleClicked.connect(self._on_news_double)
         news.body_lay.addWidget(self.news_list)
-        cv.addWidget(news, 2)
+        cv.addWidget(news, 1)
         split.addWidget(center)
 
         # ============ 右栏：AI 助手 + 我的自选 ============

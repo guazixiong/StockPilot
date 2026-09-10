@@ -124,7 +124,13 @@ class PriceRangeBar(QWidget):
 
 
 class SignalCard(QFrame):
-    """一条交易信号的机会卡片。"""
+    """一条交易信号的机会卡片（v7.2.4 紧凑版：双行布局）。
+
+    行1：徽章 + 名称代码 + 方向 · 时间/追踪（右对齐）
+    行2：现价 + 盈亏比 | 价位条 | 迷你走势 | 风险/评级 + 操作按钮
+    命中规则收进 tooltip（不再占一行）；风险提示并入行1尾。
+    单卡高度从 ~127px 压到 ~78px，配合两列流单位面积可看 3 倍机会。
+    """
 
     open_stock = Signal(str, str)
     ask_ai = Signal(object)
@@ -140,100 +146,92 @@ class SignalCard(QFrame):
     # ------------------------------------------------------------ UI
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 6, 10, 6)
+        root.setContentsMargins(10, 5, 10, 5)
         root.setSpacing(3)
 
-        # 行1：徽章 + 名称 + 方向 + 时间
+        # 行1：徽章 + 名称代码 + 方向 ·（右侧）追踪 + 风险提示 + 时间
         top = QHBoxLayout()
+        top.setSpacing(6)
         badge = QLabel(self.sig.strategy)
         badge.setStyleSheet(
-            f"background:{ACCENT}; color:#fff; border-radius:8px;"
-            "padding:2px 10px; font-size:8.5pt; font-weight:bold;")
-        name = QLabel(f"<b style='font-size:11.5pt'>{self.sig.name}</b> "
-                      f"<span style='color:{SUB}'>{self.sig.code}</span>")
+            f"background:{ACCENT}; color:#fff; border-radius:7px;"
+            "padding:1px 8px; font-size:8pt; font-weight:bold;")
+        name = QLabel(
+            f"<b style='font-size:10pt'>{self.sig.name}</b> "
+            f"<span style='color:{SUB};font-size:8pt'>{self.sig.code}</span>")
         name.setStyleSheet("background:transparent;")
-        side_txt = "买入机会" if self.sig.side == "buy" else "卖出提醒"
+        side_txt = "买" if self.sig.side == "buy" else "卖"
         side = QLabel(side_txt)
+        side.setToolTip("买入机会" if self.sig.side == "buy" else "卖出提醒")
         side.setStyleSheet(
-            f"color:{UP if self.sig.side == 'buy' else DOWN};"
-            "font-weight:bold; background:transparent;")
+            f"color:{'#fff'};background:{UP if self.sig.side == 'buy' else DOWN};"
+            "border-radius:6px;padding:0 6px;font-size:8pt;font-weight:bold;")
         self.time_label = QLabel(self.sig.time)
         self.time_label.setProperty("hint", True)
         self.track_label = QLabel("")
         self.track_label.setProperty("hint", True)
+        self.note_label = QLabel("")
+        self.note_label.setToolTip("")
+        self.note_label.setProperty("hint", True)
         top.addWidget(badge)
         top.addWidget(name)
         top.addWidget(side)
         top.addStretch(1)
         top.addWidget(self.track_label)
+        top.addWidget(self.note_label)
         top.addWidget(self.time_label)
         root.addLayout(top)
 
-        # 行2：左价位条 / 右走势+风险+评级
+        # 行2：现价+盈亏比 | 价位条（伸展）| 迷你走势 | 风险评级 + 按钮
         mid = QHBoxLayout()
-        mid.setSpacing(18)
+        mid.setSpacing(10)
         left = QVBoxLayout()
-        price_row = QHBoxLayout()
+        left.setSpacing(0)
         self.price_label = QLabel("—")
         self.price_label.setStyleSheet(
-            f"font-size:13pt; font-weight:bold; color:{TEXT};"
+            f"font-size:11pt; font-weight:bold; color:{TEXT};"
             "background:transparent;")
         self.rr_label = QLabel("—")
         self.rr_label.setProperty("sub", True)
-        price_row.addWidget(self.price_label)
-        price_row.addWidget(self.rr_label, 1)
-        left.addLayout(price_row)
+        left.addWidget(self.price_label)
+        left.addWidget(self.rr_label)
+        mid.addLayout(left)
         self.range_bar = PriceRangeBar()
-        left.addWidget(self.range_bar)
-        mid.addLayout(left, 3)
-
-        right = QHBoxLayout()
-        right.setSpacing(16)
+        mid.addWidget(self.range_bar, 2)
         self.spark = Sparkline()
-        self.spark.setFixedSize(72, 36)
-        right.addWidget(self.spark)
+        self.spark.setFixedSize(60, 30)
+        mid.addWidget(self.spark)
+        # 风险/评级合并为一列
         stat = QVBoxLayout()
-        stat.setSpacing(1)
-        risk_name = QLabel("风险")
-        risk_name.setProperty("statName", True)
+        stat.setSpacing(0)
         self.risk_label = QLabel("—")
-        self.risk_label.setAlignment(
-            Qt.AlignRight | Qt.AlignVCenter)
+        self.risk_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.risk_label.setStyleSheet(
+            "font-size:8pt; background:transparent;")
         self.grade_label = QLabel("—")
         self.grade_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.grade_label.setStyleSheet(
-            "font-size:12pt; font-weight:bold; background:transparent;"
-            "border:1px solid #1E3B5E; border-radius:9px; padding:1px 8px;")
-        stat.addWidget(risk_name)
+            "font-size:10pt; font-weight:bold; background:transparent;")
         stat.addWidget(self.risk_label)
         stat.addWidget(self.grade_label)
-        right.addLayout(stat)
-        mid.addLayout(right, 1)
-        root.addLayout(mid)
-
-        # 行3：命中规则 chips + 风险提示
-        chips = QHBoxLayout()
-        chips.setSpacing(6)
-        for rule in (self.sig.hit_rules or [])[:3]:
-            chips.addWidget(_chip(rule))
-        if self.sig.risk_notes:
-            note = QLabel("⚠ " + self.sig.risk_notes[0])
-            note.setProperty("hint", True)
-            chips.addWidget(note, 1)
-        else:
-            chips.addStretch(1)
-        root.addLayout(chips)
-
-        # 操作按钮内联到 chips 行尾（紧凑化：省一整行）
+        mid.addLayout(stat)
         for text, cb, prop in (("详情", self._open, "secondary"),
                                ("AI", self._ai, "ai"),
                                ("+自选", self._watch, "secondary")):
             b = QPushButton(text)
             b.setProperty(prop, True)
             b.setFixedHeight(22)
-            b.setFixedWidth(52 if len(text) == 2 else 60)
+            b.setFixedWidth(44)
             b.clicked.connect(cb)
-            chips.addWidget(b)
+            mid.addWidget(b)
+        root.addLayout(mid)
+
+        # 命中规则与风险说明收进 tooltip（不占卡片行）
+        rules = "、".join(self.sig.hit_rules or [])
+        notes = "；".join(self.sig.risk_notes or [])
+        self.setToolTip(
+            f"{self.sig.name}（{self.sig.code}）{self.sig.strategy}\n"
+            f"命中规则：{rules or '—'}\n风险提示：{notes or '—'}")
 
     def _fill(self) -> None:
         s = self.sig
@@ -256,15 +254,19 @@ class SignalCard(QFrame):
         else:
             self.rr_label.setText("")
         risk = s.risk_score or 0
-        self.risk_label.setText(f"{risk:.0f}/100")
+        self.risk_label.setText(f"风险 {risk:.0f}")
         band = UP if risk >= 60 else (WARNING if risk >= 35 else DOWN)
         self.risk_label.setStyleSheet(
-            f"color:{band};font-weight:bold;background:transparent;")
-        self.grade_label.setText(s.grade or "—")
-        self.grade_label.setStyleSheet(
-            f"color:{GRADE_COLOR.get(s.grade, FLAT)}; font-weight:bold;"
+            f"color:{band};font-weight:bold;font-size:8pt;"
             "background:transparent;")
+        self.grade_label.setText(f"{s.grade or '—'}级")
+        self.grade_label.setStyleSheet(
+            f"color:{GRADE_COLOR.get(s.grade, FLAT)}; font-size:10pt;"
+            "font-weight:bold;background:transparent;")
         self.spark.set_data(s.sparkline)
+        self.note_label.setText("⚠" if s.risk_notes else "")
+        self.note_label.setToolTip(
+            "；".join(s.risk_notes or []) or "")
 
     # ------------------------------------------------------------ 交互
     def _open(self) -> None:
@@ -292,11 +294,18 @@ class SignalCard(QFrame):
         except Exception:  # noqa: BLE001
             self.set_tracking(None)
 class OpportunityFlow(QScrollArea):
-    """机会卡片滚动容器（按 op_score 降序）。"""
+    """机会卡片滚动容器（按 op_score 降序）。
+
+    v7.2.4：两列网格流（宽屏横向利用）——单列时一屏只能看 1~2 张 127px
+    的卡，两列 + 紧凑卡后同屏可见数量提升约 3 倍。窄面板自动回退单列。
+    """
 
     open_stock = Signal(str, str)
     ask_ai = Signal(object)
     add_watch = Signal(str, str)
+
+    _COLS = 2          # >=560px 宽时两列
+    _MIN_COL_W = 280
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -305,7 +314,7 @@ class OpportunityFlow(QScrollArea):
         self._inner = QWidget()
         self._lay = QVBoxLayout(self._inner)
         self._lay.setContentsMargins(4, 4, 8, 4)
-        self._lay.setSpacing(8)
+        self._lay.setSpacing(6)
         self._lay.addStretch(1)
         self.setWidget(self._inner)
         self._empty = QLabel(
@@ -317,32 +326,53 @@ class OpportunityFlow(QScrollArea):
         self._empty.setTextFormat(Qt.RichText)
         self.set_signals([])
 
+    def _columns(self) -> int:
+        return self._COLS if self.viewport().width() >= (
+                self._MIN_COL_W * self._COLS + 8) else 1
+
     def set_signals(self, signals: List[TradeSignal]) -> None:
+        self._sigs = list(signals or [])
+        self._cols_rendered = self._columns()
         self._clear()
         lay = self._lay
-        if not signals:
+        if not self._sigs:
             lay.addWidget(self._empty, 1)
             return
-        for sig in sorted(signals, key=lambda s: s.op_score, reverse=True):
-            card = SignalCard(sig)
-            card.open_stock.connect(self.open_stock)
-            card.ask_ai.connect(self.ask_ai)
-            card.add_watch.connect(self.add_watch)
-            lay.addWidget(card)
+        ordered = sorted(self._sigs, key=lambda s: s.op_score, reverse=True)
+        cols = self._cols_rendered
+        rows = [ordered[i::cols] for i in range(cols)]   # 纵向优先排：左列顶级机会
+        grid = QHBoxLayout()
+        grid.setSpacing(6)
+        for col_sigs in rows:
+            col = QVBoxLayout()
+            col.setSpacing(6)
+            for sig in col_sigs:
+                card = SignalCard(sig)
+                card.open_stock.connect(self.open_stock)
+                card.ask_ai.connect(self.ask_ai)
+                card.add_watch.connect(self.add_watch)
+                col.addWidget(card)
+            col.addStretch(1)
+            grid.addLayout(col, 1)
+        lay.addLayout(grid)
         lay.addStretch(1)
 
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        # 列数随面板宽度自适应：暂存信号重建布局
+        if getattr(self, "_sigs", None) and self._columns() != getattr(
+                self, "_cols_rendered", None):
+            self.set_signals(self._sigs)
+
     def set_tracking(self, mapping: Dict[str, float]) -> None:
-        for i in range(self._lay.count()):
-            w = self._lay.itemAt(i).widget()
-            if isinstance(w, SignalCard) and w.sig.code in mapping:
+        for w in self._inner.findChildren(SignalCard):
+            if w.sig.code in mapping:
                 w.set_tracking(mapping[w.sig.code])
 
     def set_tracking_fn(self, fn) -> None:
         """fn(sig) -> float|None，逐卡计算发出以来涨跌。"""
-        for i in range(self._lay.count()):
-            w = self._lay.itemAt(i).widget()
-            if isinstance(w, SignalCard):
-                w.apply_tracking_fn(fn)
+        for w in self._inner.findChildren(SignalCard):
+            w.apply_tracking_fn(fn)
 
     def _clear(self) -> None:
         while self._lay.count():
@@ -350,5 +380,16 @@ class OpportunityFlow(QScrollArea):
             w = item.widget()
             if w is not None and w is not self._empty:
                 w.deleteLater()
+            elif item.layout() is not None:
+                # 网格行布局：删卡（子布局的 widget 归属卡自身父链）
+                while item.layout().count():
+                    sub = item.layout().takeAt(0)
+                    if sub.widget() is not None:
+                        sub.widget().deleteLater()
+                    elif sub.layout() is not None:
+                        while sub.layout().count():
+                            s2 = sub.layout().takeAt(0)
+                            if s2.widget() is not None:
+                                s2.widget().deleteLater()
         if self._empty.parent() is not None:
             self._empty.setParent(None)
