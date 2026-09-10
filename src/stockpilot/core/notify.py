@@ -40,10 +40,13 @@ def _post(url: str, payload: dict) -> Tuple[bool, str]:
     import json
 
     last_err = ""
+    # v7.2.2：webhook 推送无视系统代理（trust_env 跟死代理走 → 推送静默失败）
+    sess = requests.Session()
+    sess.trust_env = False
     for attempt in range(2):
         try:
-            r = requests.post(url, data=json.dumps(payload, ensure_ascii=False)
-                              .encode("utf-8"), headers=_HEADERS, timeout=TIMEOUT)
+            r = sess.post(url, data=json.dumps(payload, ensure_ascii=False)
+                          .encode("utf-8"), headers=_HEADERS, timeout=TIMEOUT)
             if r.status_code == 200:
                 body = r.json()
                 if body.get("code") in (0, None) and body.get("errcode", 0) == 0:

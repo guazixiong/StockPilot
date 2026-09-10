@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import SIGNAL, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QDoubleSpinBox, QFrame, QGridLayout, QGroupBox,
@@ -532,21 +532,23 @@ class MonitorPage(QWidget):
         mon = self.ctx.cfg.monitor
         self.auto_check.setChecked(bool(mon.get("auto_scan")))
         self.interval_spin.setValue(int(mon.get("interval_min") or 5))
-        self.timer = getattr(self, "timer", None) or QTimer(self)
-        self.timer.timeout.connect(self._auto_scan)
+        # 定时器只连一次（v7.2.2 修复：此前每次保存设置重复 connect，
+        # 保存 N 次后一个周期触发 N 次扫描——按钮点击后行为异常的直接根因）
+        if not hasattr(self, "timer") or self.timer is None:
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self._auto_scan)
         self.timer.start(self.interval_spin.value() * 60 * 1000)
         # 盘后日报调度：每交易日 15:08 全策略扫描 + 分组推送（Sequoia crontab 等价）
-        self.eod_timer = getattr(self, "eod_timer", None) or QTimer(self)
-        try:
-            self.eod_timer.timeout.disconnect()
-        except (RuntimeError, TypeError):
-            pass
-        self.eod_timer.timeout.connect(self._eod_check)
+        if not hasattr(self, "eod_timer") or self.eod_timer is None:
+            self.eod_timer = QTimer(self)
+            self.eod_timer.timeout.connect(self._eod_check)
         self.eod_timer.start(5 * 60 * 1000)   # 每 5 分钟检查是否到点
         try:
-            self.auto_check.toggled.disconnect(self._save_scan_cfg)
-            self.interval_spin.valueChanged.disconnect(self._save_scan_cfg)
-        except RuntimeError:
+            if self.auto_check.receivers(SIGNAL("toggled(bool)")):
+                self.auto_check.toggled.disconnect(self._save_scan_cfg)
+            if self.interval_spin.receivers(SIGNAL("valueChanged(int)")):
+                self.interval_spin.valueChanged.disconnect(self._save_scan_cfg)
+        except (RuntimeError, TypeError):
             pass
         self.auto_check.toggled.connect(self._save_scan_cfg)
         self.interval_spin.valueChanged.connect(self._save_scan_cfg)

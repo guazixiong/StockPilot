@@ -136,6 +136,10 @@ class OpenAIClient:
     def __init__(self, cfg: AiConfig, proxy: str = ""):
         self.cfg = cfg
         self.session = requests.Session()
+        # v7.2.2：与 HttpClient 同规则——未显式配置代理时无视系统代理
+        # （trust_env=True 会跟着死掉的系统代理走，AI 请求全部失败）。
+        # AI 服务在局域网（LM Studio/Ollama）时直连更是唯一正确行为。
+        self.session.trust_env = False
         if proxy:
             self.session.proxies = {"http": proxy, "https": proxy}
 

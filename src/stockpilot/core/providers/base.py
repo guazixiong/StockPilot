@@ -81,6 +81,10 @@ class HttpClient:
     def __init__(self, proxy: Optional[str] = None, timeout: float = 8.0):
         self.timeout = timeout
         self.session = requests.Session()
+        # v7.2.2：无视系统代理抓取（trust_env 默认 True 会跟着环境变量/注册表
+        # 的死代理走，导致全部行情请求 ProxyError——用户日志实锤）。
+        # 本应用数据源均为国内公网接口，未显式配置代理时必须直连。
+        self.session.trust_env = False
         self.session.headers.update({
             "User-Agent": USER_AGENT,
             "Accept": "*/*",

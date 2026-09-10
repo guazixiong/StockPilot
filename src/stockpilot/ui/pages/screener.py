@@ -5,7 +5,7 @@ Tab2 条件筛选：v1.2 的条件表单 + 方案 + 表格 + 导出。
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import SIGNAL, Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
                                QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
                                QLabel, QMessageBox, QPushButton, QSpinBox,
@@ -405,8 +405,9 @@ class ScreenerPage(QWidget):
         for p in self.ctx.cfg.get_plans():
             self.plan_combo.addItem(p["name"])
         try:
-            self.plan_combo.currentIndexChanged.disconnect(self._on_plan)
-        except RuntimeError:
+            if self.plan_combo.receivers(SIGNAL("currentIndexChanged(int)")):
+                self.plan_combo.currentIndexChanged.disconnect(self._on_plan)
+        except (RuntimeError, TypeError):
             pass
         self.plan_combo.currentIndexChanged.connect(self._on_plan)
 
