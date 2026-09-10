@@ -18,3 +18,7 @@ tmp/build_*.log
 tmp/mini_review.py
 tmp/unz/
 tmp/pkg/
+tmp/probe_*.py
+tmp/shot_*.py
+tmp/mini_review.py
+tmp/diff_v722.txt
