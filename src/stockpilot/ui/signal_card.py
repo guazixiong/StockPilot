@@ -107,15 +107,44 @@ class PriceRangeBar(QWidget):
         span = self.target - self.stop
         px = lambda v: max(2, min(w - 2, (v - self.stop) / span * w))  # noqa: E731
 
-        p.setPen(QColor(DOWN))
-        p.drawText(QRectF(0, bar_y + bar_h, 130, 14),
-                   Qt.AlignLeft | Qt.AlignVCenter, f"止损 {self.stop:.2f}")
-        p.setPen(QColor(TEXT))
-        p.drawText(QRectF(w / 2 - 65, bar_y + bar_h, 130, 14),
-                   Qt.AlignHCenter | Qt.AlignVCenter, f"现价 {self.price:.2f}")
-        p.setPen(QColor(UP))
-        p.drawText(QRectF(w - 130, bar_y + bar_h, 130, 14),
-                   Qt.AlignRight | Qt.AlignVCenter, f"目标 {self.target:.2f}")
+        # v7.2.6 分辨率适配：三个 130px 标签位至少需要 ~390px 宽，宽不足时
+        # 逐级退化：中档画『损/现/目』紧凑三段；极窄（<130px）只画现价
+        # 线 + 现价数字，避免标签互叠（1920×1080 双列流下 11~147px 价位
+        # 条的实拍异常；具体数值 tooltip 与详情页仍完整可见）。
+        compact = w < 400
+        tiny = w < 130
+        if tiny:
+            p.setFont(QFont("Microsoft YaHei UI", 6))
+            p.setPen(QColor(TEXT))
+            p.drawText(QRectF(0, bar_y + bar_h, w, 14),
+                       Qt.AlignHCenter | Qt.AlignVCenter, f"现 {self.price:.2f}")
+        elif compact:
+            f_small = QFont("Microsoft YaHei UI", 6)
+            p.setFont(f_small)
+            label_w = w / 3
+            p.setPen(QColor(DOWN))
+            p.drawText(QRectF(0, bar_y + bar_h, label_w, 14),
+                       Qt.AlignLeft | Qt.AlignVCenter,
+                       f"损{self.stop:.2f}")
+            p.setPen(QColor(TEXT))
+            p.drawText(QRectF(label_w, bar_y + bar_h, label_w, 14),
+                       Qt.AlignHCenter | Qt.AlignVCenter,
+                       f"现{self.price:.2f}")
+            p.setPen(QColor(UP))
+            p.drawText(QRectF(label_w * 2, bar_y + bar_h, label_w, 14),
+                       Qt.AlignRight | Qt.AlignVCenter,
+                       f"目{self.target:.2f}")
+        else:
+            p.setFont(QFont("Microsoft YaHei UI", 7))
+            p.setPen(QColor(DOWN))
+            p.drawText(QRectF(0, bar_y + bar_h, 130, 14),
+                       Qt.AlignLeft | Qt.AlignVCenter, f"止损 {self.stop:.2f}")
+            p.setPen(QColor(TEXT))
+            p.drawText(QRectF(w / 2 - 65, bar_y + bar_h, 130, 14),
+                       Qt.AlignHCenter | Qt.AlignVCenter, f"现价 {self.price:.2f}")
+            p.setPen(QColor(UP))
+            p.drawText(QRectF(w - 130, bar_y + bar_h, 130, 14),
+                       Qt.AlignRight | Qt.AlignVCenter, f"目标 {self.target:.2f}")
 
         x = px(self.price)
         p.setPen(QPen(QColor("#ffffff"), 2))
@@ -226,12 +255,21 @@ class SignalCard(QFrame):
             mid.addWidget(b)
         root.addLayout(mid)
 
-        # 命中规则与风险说明收进 tooltip（不占卡片行）
-        rules = "、".join(self.sig.hit_rules or [])
-        notes = "；".join(self.sig.risk_notes or [])
-        self.setToolTip(
-            f"{self.sig.name}（{self.sig.code}）{self.sig.strategy}\n"
-            f"命中规则：{rules or '—'}\n风险提示：{notes or '—'}")
+        # v7.2.6 分辨率适配：卡宽不足时折叠行2 次要元素给价位条让位。
+        self._compact = False
+        self._update_tip()
+        self._apply_compact()
+
+    def _update_tip(self) -> None:
+        """卡片 tooltip：规则/风险/（紧凑时）盈亏比。"""
+        s = self.sig
+        rules = "、".join(s.hit_rules or [])
+        notes = "；".join(s.risk_notes or [])
+        tip = (f"{s.name}（{s.code}）{s.strategy}\n"
+               f"命中规则：{rules or '—'}\n风险提示：{notes or '—'}")
+        if self._compact:
+            tip += self._rr_tip()
+        self.setToolTip(tip)
 
     def _fill(self) -> None:
         s = self.sig
@@ -269,6 +307,32 @@ class SignalCard(QFrame):
             "；".join(s.risk_notes or []) or "")
 
     # ------------------------------------------------------------ 交互
+    def _apply_compact(self) -> None:
+        """v7.2.6：卡宽不足时逐级折叠行2 次要元素给价位条让位。
+
+        <470px：隐藏迷你走势 + 盈亏比收进 tooltip（按钮组的 44px 最小宽
+        与现价/风险列都是硬需求，价位条是行2 唯一可让位的弹性元素）。
+        1920×1080 双列流下价位条曾从 396px 被压到 11px 的实拍异常即此。"""
+        compact = 0 < self.width() < 470
+        if compact != self._compact:
+            self._compact = compact
+            self.spark.setVisible(not compact)
+            self.rr_label.setVisible(not compact)
+            self._update_tip()
+        # 价位条保底宽：低于此只画色条不画标签（paintEvent 紧凑模式）
+        self.range_bar.setMinimumWidth(60 if compact else 0)
+
+    def _rr_tip(self) -> str:
+        s = self.sig
+        if s.price and s.stop_price and s.target_price and s.price > s.stop_price:
+            rr = (s.target_price - s.price) / (s.price - s.stop_price)
+            return f"\n盈亏比 {rr:.1f}"
+        return ""
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        self._apply_compact()
+
     def _open(self) -> None:
         self.open_stock.emit(self.sig.code, self.sig.name)
 
@@ -304,8 +368,12 @@ class OpportunityFlow(QScrollArea):
     ask_ai = Signal(object)
     add_watch = Signal(str, str)
 
-    _COLS = 2          # >=560px 宽时两列
-    _MIN_COL_W = 280
+    _COLS = 2          # 视口够宽时两列（阈值随 _MIN_COL_W）
+    _MIN_COL_W = 390   # v7.2.6：280→390。行2 固定元素（按钮组+现价/风险列）
+    # 约 330px，280px 列宽下价位条只剩 11px 且三标签互叠（1920×1080
+    # 用户实拍异常根因）。390 = 330 固定 + 60 价位条保底：2560 屏两列
+    # 559px 全元素；1920 屏两列 ~396px 走势/盈亏比自动折叠（等比例
+    # 适配），仍保双列流一屏多卡的 v7.2.4 设计初衷。
 
     def __init__(self, parent=None):
         super().__init__(parent)

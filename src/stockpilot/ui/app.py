@@ -233,7 +233,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{__version__}")
         self.resize(1600, 900)
-        self.setMinimumSize(1440, 850)
+        self.setMinimumSize(1200, 700)
+        # v7.2.6 分辨率适配：1440×850 的下限在 1366×768 笔记本上超出
+        # 屏幕可用区（去任务栏约 728px）→ 窗口被系统强制裁剪、底部
+        # 页签/内容截断。降到 1200×700 覆盖主流最小分辨率，同时布局
+        # 已按视口自适应（机会流列数/卡内折叠/价位条紧凑标签）。
         self._geo = QSettings("StockPilot", "MainWindow")
         g = self._geo.value("geometry")
         if g is not None:
@@ -241,6 +245,19 @@ class MainWindow(QMainWindow):
                 self.restoreGeometry(g)
             except Exception:  # noqa: BLE001
                 self.resize(1600, 900)
+        # v7.2.6：恢复的几何可能来自更高分辨率机器（如 2560×1440 存的
+        # 2304×1280）——搬屏/降分辨率后钳回当前屏幕可用区，避免标题栏
+        # 拖不回来、内容超出屏幕。
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        if avail is not None:
+            fw, fh = self.frameGeometry().width(), self.frameGeometry().height()
+            if (self.x() < avail.x() - 8 or self.y() < avail.y() - 8
+                    or self.x() + fw > avail.right() + 8
+                    or self.y() + fh > avail.bottom() + 8):
+                self.move(avail.x(), avail.y())
+                if fw > avail.width() or fh > avail.height():
+                    self.resize(avail.width(), avail.height())
         self.cfg = Config()
         self.ctx = AppContext(self.cfg)
 
