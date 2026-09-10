@@ -35,8 +35,11 @@ def test_scheduler_reentry_lock(qapp, monkeypatch):
     ctx = AppContext(Config())
     ctx.monitor.market_fetch = lambda max_count=2000: []
     import stockpilot.ui.scheduler as sch_mod
-    sch_mod.submit = lambda *a, **k: None        # 打桩不真跑
-    sch_mod.is_trading_hours = lambda dt=None: True   # 测试环境绕过时段门禁
+    # v7.2.3：改走 monkeypatch（此前裸赋值污染模块属性到整个测试会话，
+    # 掩盖了生产环境 scheduler.submit 不存在的崩溃——crash.log 实锤）
+    monkeypatch.setattr(sch_mod, "submit", lambda *a, **k: None,
+                        raising=False)
+    monkeypatch.setattr(sch_mod, "is_trading_hours", lambda dt=None: True)
     s = MonitorScheduler(ctx)
     s._in_flight = True
     s._tick()
@@ -113,3 +116,37 @@ def test_scheduler_local_chain_e2e(qapp, monkeypatch):
     # 同条 30 分钟去重 → 二轮不再通知
     s._on_done([WatchAlert("B", "股B", "纪律·hard_stop", "danger", "硬止损", "", "")])
     assert got == [1]
+
+
+# ---------------------------------------------------------------- v7.2.3 回归
+def test_scheduler_tick_production_path(qapp):
+    """v7.2.3 回归闸：生产路径（未 monkeypatch 模块属性）交易时段 _tick
+    不得抛 AttributeError。
+
+    事故：_tick 曾调用 `stockpilot.ui.scheduler.submit` —— 该属性只在测试
+    打桩时被塞进模块，生产环境每个交易时段 tick 必炸
+    （crash.log 2026-09-10 'module has no attribute submit'）。
+    修复后 submit 来自 workers 模块（与页面同一条后台投递链）。
+    """
+    import tempfile
+    import stockpilot.core.session_store as ss
+    ss.data_dir = lambda: tempfile.mkdtemp()
+    from stockpilot.core.storage import Config
+    from stockpilot.ui.context import AppContext
+    import stockpilot.ui.scheduler as sch_mod
+    from stockpilot.ui.scheduler import MonitorScheduler
+    assert not hasattr(sch_mod, "submit"), "scheduler 模块不应自带 submit"
+    ctx = AppContext(Config())
+    ctx.monitor.market_fetch = lambda max_count=2000: []
+    ctx.get_quotes = lambda codes: {}
+    ctx.kline_for_scan = lambda code, limit=800: []
+    s = MonitorScheduler(ctx)
+    orig_gate = sch_mod.is_trading_hours
+    try:
+        monkeypatch_gate = lambda dt=None: True   # 绕过时段门禁
+        sch_mod.is_trading_hours = monkeypatch_gate
+        s._tick()        # 不打桩 submit —— 必须走真实 workers.submit
+        assert s._in_flight is True, "tick 应发起扫描并置锁"
+    finally:
+        sch_mod.is_trading_hours = orig_gate
+        s.stop()

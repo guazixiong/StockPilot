@@ -64,9 +64,12 @@ class MonitorScheduler(QObject):
         if self._in_flight or not is_trading_hours():
             return
         self._in_flight = True
-        import stockpilot.ui.scheduler as _self_mod
-        _self_mod.submit(self._scan_all, on_done=self._on_done,
-                         on_err=self._on_err)
+        # v7.2.3 修复：此前误用 `stockpilot.ui.scheduler.submit`（该属性只
+        # 在测试里被 monkeypatch 打桩时存在）→ 生产环境每个交易时段 tick
+        # 必抛 AttributeError（crash.log 2026-09-10 实锤）。正确来源是
+        # 同包 workers.submit，与页面层调用同一条后台投递链。
+        from .workers import submit
+        submit(self._scan_all, on_done=self._on_done, on_err=self._on_err)
 
     # ------------------------------------------------------------ 一轮扫描
     def _scan_all(self) -> List:
