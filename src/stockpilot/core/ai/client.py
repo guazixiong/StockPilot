@@ -237,14 +237,38 @@ class OpenAIClient:
                     except UnicodeDecodeError:
                         # 多字节字符恰好跨在两个 chunk 边界：缓存拼接再解码
                         yield raw.decode("utf-8", errors="ignore")
+
+            # v7.2.8：SSE 高频 delta 节流（burst 刷 UI/跨线程 emit）。
+            # 部分 reasoning 模型逐 token 吐 chunk（>100/s），每个 chunk
+            # 一次跨线程 Signal emit + 一次 insertHtml；Windows 上高频
+            # 跨线程信号+文本引擎并发是 native 竞态温床（WER 两记
+            # 0xc0000005）。聚合 80ms 窗口成批投递：视觉无感（人眼对
+            # 80ms 的"流式感"无差别），emit 压力降 1~2 个数量级。
+            import time as _time
+            _BURST_MS = 0.080
+            _buf_kind: str = ""
+            _buf_txt: List[str] = []
+            _last = _time.monotonic()
+
+            def _flush(force: bool = False) -> None:
+                nonlocal _buf_kind, _buf_txt, _last
+                if _buf_txt and (_buf_kind or force):
+                    on_delta(_buf_kind, "".join(_buf_txt))
+                _buf_kind, _buf_txt, _last = "", [], _time.monotonic()
+
             try:
                 for kind, text in parse_sse_stream(_lines()):
                     if stop_event is not None and stop_event.is_set():
                         break
                     if on_delta:
-                        on_delta(kind, text)
+                        if kind != _buf_kind:
+                            _flush()           # 换类型（content↔reasoning）先冲
+                        _buf_kind, _ = kind, _buf_txt.append(text)
+                        if _time.monotonic() - _last >= _BURST_MS:
+                            _flush()           # 到窗即冲
                     if kind == "content":
                         collected.append(text)
+                _flush(force=True)             # 流尾残余
             finally:
                 resp.close()
         else:

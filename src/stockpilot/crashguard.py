@@ -1,16 +1,22 @@
 """全局崩溃捕获：闪退不消失，全部落盘 data/logs/crash.log 可查。
 
-三道防线（v7.2.1，用户报告"总是闪退且无报错信息"）：
+四道防线：
 1. sys.excepthook —— 主线程未捕获 Python 异常（原本直接 stderr 后闪退）；
 2. threading.excepthook —— 后台 Worker/QRunnable 线程异常（此前只打 log，UI 无感）；
 3. Qt 消息钩子 —— qWarning/qFatal/qCritical 里的 libpyside 转储（如
    "Failed to disconnect ... from signal"，闪退前兆）统一记录。
+4. faulthandler（v7.2.8）—— C 层硬崩（段错误 0xc0000005 / abort）：
+   Python excepthook 根本不经过，此前这类闪退 crash.log 完全空白
+   （2026-09-10 22:48/22:52 两次 AI 分析闪退实锤：WER 记录
+   python313.dll / Qt6Core.dll 访问冲突，本文件无任何痕迹）。
+   faulthandler 在解释器致命信号时直接把各线程 Python 栈写进 crash.log。
 
 写入 crash.log（带版本/时间/线程/堆栈），主线程异常额外弹一个
 QMessageBox（应用还没死透时），让"闪退"变成"看得见的报错"。
 """
 from __future__ import annotations
 
+import faulthandler
 import logging
 import os
 import sys
@@ -106,7 +112,7 @@ _orig_qt_handler = None
 
 
 def install() -> None:
-    """装上三道防线。幂等（重复安装无副作用）。"""
+    """装上四道防线。幂等（重复安装无副作用）。"""
     global _orig_py_hook, _orig_qt_handler
     # v7.2.7：二次安装不得把已装上的 _py_hook 记成"原钩子"——否则
     # 异常链 _py_hook→_orig→_py_hook… 无限自递归（RecursionError）。
@@ -114,6 +120,26 @@ def install() -> None:
         _orig_py_hook = sys.excepthook
         sys.excepthook = _py_hook
     threading.excepthook = _thread_hook
+    # v7.2.8 第四道防线：C 层崩溃也落盘。faulthandler 捕获 SIGSEGV/
+    # SIGABRT/Windows 非法访问等致命信号，把所有线程的 Python 栈
+    # 写进 crash.log——否则这类闪退完全无痕（Python 层钩子不经过）。
+    # 注意：faulthandler 只接受真实文件对象（要拿 fd），不能包装。
+    # 崩溃头部无法在崩溃现场补写（信号上下文只许最小操作），改为
+    # 启用时预写一行启用标记；native 栈以 "Fatal Python error:" 开头，
+    # 与 write_crash 的分隔块（"====" 行）视觉上可区分。
+    try:
+        p = _crash_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _fh_file = open(p, "a", encoding="utf-8", buffering=1)
+        from . import __version__
+        _fh_file.write(
+            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] v{__version__} "
+            f"pid={os.getpid()} faulthandler已启用：后续无分隔块的"
+            f"\"Fatal Python error:\" 段即C层崩溃转储\n")
+        faulthandler.enable(file=_fh_file, all_threads=True)
+    except Exception:  # noqa: BLE001 —— 无盘可写时不能拖垮启动
+        log.warning("faulthandler 落盘启用失败（继续运行，无 native 栈）",
+                    exc_info=True)
     try:
         from PySide6.QtCore import qInstallMessageHandler
         qInstallMessageHandler(_qt_msg_handler)
