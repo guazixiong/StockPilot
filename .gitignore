@@ -28,3 +28,8 @@ tmp/pkg3/
 tmp/unz3/
 tmp/diff_v723.txt
 tmp/build_v723.log
+
+tmp/pkg_v724/
+tmp/unz_v724/
+tmp/unz_v724_final/
+tmp/upd_v724.py
