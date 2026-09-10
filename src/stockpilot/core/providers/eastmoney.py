@@ -14,7 +14,15 @@ from .base import HttpClient, ProgressCb, Provider, ProviderError, register_prov
 log = logging.getLogger(__name__)
 
 KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+# v7.2.5：clist 主源换 push2delay。东财对本机的 push2 clist 端点定向拒绝
+# （TLS 握手正常、HTTP 请求一发出即被 RST，6/6 稳定复现；同主机 ulist.np
+# 却正常）——v7.2.2 修掉死代理后"东财全市场列表"仍 100% 失败，应用长期
+# 跑在新浪降级源上且每分钟刷 WARNING（app.log 425 条"切换新浪"实锤）。
+# push2delay 实测可用：total=5912 全市场、f62 主力净额等字段齐全，
+# 唯一差异 pz 被服务端钳到 100（请求 200 实得 100，fetch_market_page
+# 按"实得行数"推进翻页，天然兼容）。
+CLIST_URL = "https://push2delay.eastmoney.com/api/qt/clist/get"
+CLIST_FALLBACK_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 FAST_NEWS_URL = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
 ANN_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 SEARCH_URL = "https://search-api-web.eastmoney.com/search/jsonp"
@@ -115,12 +123,25 @@ class EastmoneyProvider(Provider):
     # ------------------------------------------------------ 全市场快照
     def fetch_market_page(self, page: int, page_size: int = 200,
                           sort_field: str = "f6") -> Tuple[int, List[dict]]:
-        """返回 (总数, 当页解析后的行列表)。按 sort_field 降序。"""
-        data = self.http.get_json(CLIST_URL, params={
+        """返回 (总数, 当页解析后的行列表)。按 sort_field 降序。
+
+        v7.2.5：主源 push2delay 失败时回退老 push2 域重试一次（防 CDN
+        节点单点抖动）；push2delay 的 pz 服务端钳到 100，按实得行数翻页。
+        """
+        params = {
             "pn": page, "pz": page_size, "po": 1, "np": 1,
             "fltt": 2, "invt": 2, "fid": sort_field, "fs": FS_ALL,
             "fields": CLIST_FIELDS,
-        }, timeout=12)
+        }
+        last_exc: Optional[Exception] = None
+        for url in (CLIST_URL, CLIST_FALLBACK_URL):
+            try:
+                data = self.http.get_json(url, params=params, timeout=12)
+                break
+            except ProviderError as exc:
+                last_exc = exc
+        else:
+            raise last_exc  # 两个域都失败（熔断信息在 exc 里）
         d = (data or {}).get("data") or {}
         total = int(d.get("total") or 0)
         diff = d.get("diff") or []
@@ -147,12 +168,24 @@ class EastmoneyProvider(Provider):
 
     # ---------------------------------------------------------- 大盘资金
     def get_market_moneyflow(self):
-        """沪深两市主力净额（元）。返回 {名称: 净额}。点查接口，列表接口被限流时仍可用。"""
-        data = self.http.get_json(
-            "https://push2.eastmoney.com/api/qt/ulist.np/get", params={
-                "fltt": 2, "fields": "f12,f14,f62",
-                "secids": "1.000001,0.399001",
-            }, timeout=10)
+        """沪深两市主力净额（元）。返回 {名称: 净额}。点查接口，列表接口被限流时仍可用。
+
+        v7.2.5：一并换 push2delay（push2 本机 ulist 8 连发 0/8 同样被拒；
+        push2delay 8/8 稳定），push2 域留作回退。"""
+        last_exc: Optional[Exception] = None
+        data = None
+        for host in ("push2delay.eastmoney.com", "push2.eastmoney.com"):
+            try:
+                data = self.http.get_json(
+                    f"https://{host}/api/qt/ulist.np/get", params={
+                        "fltt": 2, "fields": "f12,f14,f62",
+                        "secids": "1.000001,0.399001",
+                    }, timeout=10)
+                break
+            except ProviderError as exc:
+                last_exc = exc
+        if data is None:
+            raise last_exc
         out = {}
         for row in ((data or {}).get("data") or {}).get("diff") or []:
             out[str(row.get("f14"))] = float(row.get("f62") or 0)
