@@ -480,9 +480,10 @@ class MainWindow(QMainWindow):
         self.monitor.apply_settings()
         self.topbar.refresh()
         proxy = (self.cfg.get("market") or {}).get("proxy") or ""
-        if (proxy or None) != self.ctx.http.session.proxies.get("https"):
-            self.ctx.http.session.proxies = (
-                {"http": proxy, "https": proxy} if proxy else {})
+        # v7.2.9：HttpClient Session 已线程本地化——代理更新走公共属性，
+        # 各线程下次懒建/重建 Session 时自动带上（不再直接改某个线程的池）。
+        self.ctx.http.set_proxy(proxy)
+        self.ctx.http.reset_thread_sessions()
 
     def resizeEvent(self, ev) -> None:  # noqa: N802
         if hasattr(self, "ai_assistant"):

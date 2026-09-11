@@ -41,7 +41,10 @@ class HostBreaker:
 
     def check(self, url: str) -> None:
         host = self._host(url)
-        until = self._open_until.get(host, 0.0)
+        # v7.2.9：读也持锁——record 清计数与 check 读之间的无锁竞态
+        # 在 12 线程高频下虽无 native 风险，但语义上可能读到半更新状态。
+        with self._lock:
+            until = self._open_until.get(host, 0.0)
         if until > time.time():
             raise ProviderError(
                 f"主机 {host} 熔断中（近 {self.threshold} 连败，"
@@ -76,24 +79,71 @@ class HostBreaker:
 
 
 class HttpClient:
-    """带重试与可选代理的同步 HTTP 客户端（线程内使用，非线程安全共享需谨慎）。"""
+    """带重试与可选代理的同步 HTTP 客户端。
+
+    v7.2.9 关键变更——线程本地 Session：
+    CPython 3.13.5 存在官方已知 native crash（gh-134698，3.13.6 修复）：
+    多线程并发调用共享 Session 的 ssl 读写时，OpenSSL 内部状态在 GIL
+    释放窗口竞态 → access violation（python313.dll 0xC0000005，WER
+    实锤、dist exe 复现 81s 必崩、固定偏移 0x1cf5a9）。12 线程全市场
+    扫描 + AI SSE + 行情轮询并发即可触发。
+    修复：每线程独立 Session（thread-local）——线程内连接池/SSLContext
+    完全隔离，跨线程共享对象不复存在，竞态面归零。附带收益：消除
+    urllib3 池满 discard 告警（每线程独享池）。Session 创建轻量
+    （毫秒级），线程池工作线程数固定，泄漏可控。"""
 
     def __init__(self, proxy: Optional[str] = None, timeout: float = 8.0):
         self.timeout = timeout
-        self.session = requests.Session()
-        # v7.2.2：无视系统代理抓取（trust_env 默认 True 会跟着环境变量/注册表
-        # 的死代理走，导致全部行情请求 ProxyError——用户日志实锤）。
-        # 本应用数据源均为国内公网接口，未显式配置代理时必须直连。
-        self.session.trust_env = False
-        self.session.headers.update({
-            "User-Agent": USER_AGENT,
-            "Accept": "*/*",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-        })
-        if proxy:
-            self.session.proxies = {"http": proxy, "https": proxy}
+        self.proxy = proxy or ""
+        # 实例级 thread-local（不能是类属性：多个 client 实例会串用
+        # 同一存储——无代理实例建过 Session 后，带代理实例在同线程
+        # 会复用它，代理配置丢失。v7.2.9 单测已覆盖此坑）。
+        self._local = __import__("threading").local()
         # v4.4.2：主机级熔断（状态在 HostBreaker 类级共享，跨 client 生效）
         self._breaker = HostBreaker()
+
+    def set_proxy(self, proxy: str) -> None:
+        """更新代理配置并丢弃所有线程的旧 Session（懒重建生效新代理）。"""
+        self.proxy = proxy or ""
+
+    def reset_thread_sessions(self) -> None:
+        """关闭并清空当前线程 Session；其余线程下次访问时按新配置重建。
+
+        注：threading.local 无法跨线程枚举，各工作线程的旧 Session
+        会存留到线程退出（闭池关窗即回收）。代理变更后旧线程 Session
+        仍持旧代理属已知折衷——新任务线程均使用新代理；存量极小
+        （QThreadPool 固定线程，proxy 变更是低频操作）。"""
+        self.close_thread_session()
+
+    @property
+    def session(self) -> requests.Session:
+        """当前线程专属 Session（懒建）。语义兼容旧属性访问。"""
+        s = getattr(self._local, "session", None)
+        if s is None:
+            s = requests.Session()
+            # v7.2.2：无视系统代理抓取（trust_env 默认 True 会跟着环境变量/
+            # 注册表的死代理走，导致全部行情请求 ProxyError——用户日志实锤）。
+            # 本应用数据源均为国内公网接口，未显式配置代理时必须直连。
+            s.trust_env = False
+            s.headers.update({
+                "User-Agent": USER_AGENT,
+                "Accept": "*/*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            })
+            if self.proxy:
+                s.proxies = {"http": self.proxy, "https": self.proxy}
+            self._local.session = s
+        return s
+
+    def close_thread_session(self) -> None:
+        """显式关闭当前线程的 Session（长寿命线程退出钩子可调）。"""
+        s = getattr(self._local, "session", None)
+        if s is not None:
+            try:
+                s.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._local.session = None
 
     def get_text(
         self,

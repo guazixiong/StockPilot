@@ -135,13 +135,26 @@ def parse_sse_stream(lines: Generator[str, None, None]
 class OpenAIClient:
     def __init__(self, cfg: AiConfig, proxy: str = ""):
         self.cfg = cfg
-        self.session = requests.Session()
-        # v7.2.2：与 HttpClient 同规则——未显式配置代理时无视系统代理
-        # （trust_env=True 会跟着死掉的系统代理走，AI 请求全部失败）。
-        # AI 服务在局域网（LM Studio/Ollama）时直连更是唯一正确行为。
-        self.session.trust_env = False
-        if proxy:
-            self.session.proxies = {"http": proxy, "https": proxy}
+        self._proxy = proxy
+        # v7.2.9：线程本地 Session（gh-134698 同源修复，详见
+        # providers/base.py HttpClient 注释）。详情窗/AI页/侧栏多个
+        # Worker 线程可能并发共用同一个 ctx.ai_client() 缓存实例，
+        # 多线程共享 Session 的 ssl 读写是 3.13.5 native crash 面。
+        self._local = threading.local()
+
+    @property
+    def session(self) -> requests.Session:
+        s = getattr(self._local, "session", None)
+        if s is None:
+            s = requests.Session()
+            # v7.2.2：与 HttpClient 同规则——未显式配置代理时无视系统代理
+            # （trust_env=True 会跟着死掉的系统代理走，AI 请求全部失败）。
+            # AI 服务在局域网（LM Studio/Ollama）时直连更是唯一正确行为。
+            s.trust_env = False
+            if self._proxy:
+                s.proxies = {"http": self._proxy, "https": self._proxy}
+            self._local.session = s
+        return s
 
     def _headers(self) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}
