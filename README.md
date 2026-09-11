@@ -37,7 +37,7 @@
 
 ## 快速开始（普通用户）
 
-1. 从 [Releases](../../releases) 下载最新便携版 zip（如 `StockPilot-v7.2.8-绿色便携版.zip`），解压后双击 `StockPilot.exe`（无需安装 Python，无其他依赖）。
+1. 从 [Releases](../../releases) 下载最新便携版 zip（如 `StockPilot-v7.2.8-portable-win64.zip`），解压后双击 `StockPilot.exe`（无需安装 Python，无其他依赖）。
 2. 行情页直接可用（内置免费数据源，无需注册/Token）。
 3. AI 功能：到「设置」或「AI 分析」页选择厂商（如 DeepSeek），填入 API Key 与模型名，点「测试连接」→「保存配置」。
 4. 通知（可选）：到「设置」页粘贴飞书/钉钉/企微机器人 webhook → 「发送测试消息」→ 勾选「启用推送」。
