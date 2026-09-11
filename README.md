@@ -35,6 +35,20 @@
 
 **系统不支持自动下单**；所有 AI 与策略输出均为研究参考，不构成投资建议。
 
+## 界面效果
+
+| 首页工作台（机会 + 上证K线 + 自选 + 快讯） | 板块热力（49 行业红涨绿跌 + 资金流） |
+|:---:|:---:|
+| ![首页工作台](docs/images/home.png) | ![板块热力](docs/images/boards.png) |
+
+| 机会雷达（策略扫描 → 机会卡片流 + AI 解读） | 行情看板（四大指数 + 自选实时表） |
+|:---:|:---:|
+| ![机会雷达](docs/images/radar.png) | ![行情看板](docs/images/market.png) |
+
+![AI 分析：就地流式报告](docs/images/ai.png)
+
+> 截图由真实界面离线渲染（演示数据）。
+
 ## 快速开始（普通用户）
 
 1. 从 [Releases](../../releases) 下载最新便携版 zip（如 `StockPilot-v7.2.8-portable-win64.zip`），解压后双击 `StockPilot.exe`（无需安装 Python，无其他依赖）。
