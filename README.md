@@ -37,7 +37,7 @@
 
 ## 快速开始（普通用户）
 
-1. 双击 `dist/StockPilot.exe`（无需安装 Python，无其他依赖）。
+1. 从 [Releases](../../releases) 下载最新便携版 zip（如 `StockPilot-v7.2.8-绿色便携版.zip`），解压后双击 `StockPilot.exe`（无需安装 Python，无其他依赖）。
 2. 行情页直接可用（内置免费数据源，无需注册/Token）。
 3. AI 功能：到「设置」或「AI 分析」页选择厂商（如 DeepSeek），填入 API Key 与模型名，点「测试连接」→「保存配置」。
 4. 通知（可选）：到「设置」页粘贴飞书/钉钉/企微机器人 webhook → 「发送测试消息」→ 勾选「启用推送」。
@@ -109,4 +109,8 @@ stockpilot.spec       PyInstaller 配置（onefile）
 
 ## 许可
 
-本项目代码为用户委托开发的自研实现，采用 MIT 许可。所调研参考的开源项目（go-stock GPL-3.0、TradingAgents Apache-2.0、akshare MIT 等）仅用于接口调研与设计参考，未复制其代码。
+本项目采用 [MIT 许可](LICENSE)，可自由使用、修改与分发。所调研参考的开源项目（go-stock GPL-3.0、TradingAgents Apache-2.0、akshare MIT 等）仅用于接口调研与设计参考，未复制其代码。
+
+## 发布版本
+
+各版本更新日志与绿色便携包见 [Releases](../../releases)。当前最新版本 **v7.2.8**（2026-09-10）：修复 AI 分析闪退无崩溃日志（新增 C 层崩溃落盘防线 + 流式输出聚合节流）。

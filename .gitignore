@@ -71,3 +71,8 @@ tmp/probe_final_res.py
 tmp/build_v726.log
 tmp/diff_v726.txt
 tmp/unz_v726/
+
+# v7.2.8 发布前清理：运行时数据/调试探针整体不入库（data/ 已有，tmp/ 整目录补全）
+tmp/
+*.xlsx
+data_seed_config.json
