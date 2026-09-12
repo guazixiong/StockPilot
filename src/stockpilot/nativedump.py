@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
-"""第五道防线（v7.2.10 修订二）：外部看门狗——唯一可靠的 native 崩溃取证通道。
+"""第五道防线（v7.2.10 修订三）：外部看门狗——native 崩溃取证通道。
 
-演进史（为什么进程内通道全撤）：
-1. SEH filter（SetUnhandledExceptionFilter）：被后装的 faulthandler 顶掉，
-   从未被调（marker=0 实测）。
-2. VEH（AddVectoredExceptionHandler，插队头）：可达性更糟——真崩溃现场
-   （解释器状态/GIL/堆已损）ctypes 回调体不可达，v7.2.10 三次真崩溃
-   marker=0、无 dmp；且 ctypes-Python 回调插进异常分发链路，疑似干扰
-   v7.2.9 时代正常生成的 WER 报告（v7.2.10 三次真崩溃 WER 全无踪迹，
-   ReportArchive 最新条目停留在 v7.2.9 的 9-11 11:20）。
-3. **watchdog（定型）**：第二个进程（exe 自身 --watchdog <gui_pid>）
-   周期 WaitForSingleObject 观察 GUI。死亡 → 精确秒级时间戳写入
-   crash.log → 事后按时间窗从 WER（事件日志/ReportArchive）提取
-   "模块+偏移"。观察者在崩溃进程之外，不受解释器死亡影响。
-
-进程内仍保留 faulthandler（纯 C，crashguard 管理）——它不受本模块影响。
+演进史（为什么进程内通道全撤、为什么加活体快照）：
+1. SEH filter（SetUnhandledExceptionFilter）：被后装的 faulthandler
+   顶掉，从未被调（marker=0 实测）。
+2. VEH（AddVectoredExceptionHandler）：真崩溃现场（解释器状态/GIL/
+   堆已损）ctypes 回调体不可达，marker=0、无 dmp；且疑似干扰 WER
+   分发（v7.2.10 初版期间 WER 全无踪迹）。已全部移除。
+3. WER LocalDumps（HKCU 注册表，实测已配置）：本机 WerSvc 常停，
+   A 形态真崩溃后无 dmp、无事件——发布机器不可依赖。
+4. **watchdog 定型（修订三）**：exe spawn 自身 --watchdog <gui_pid>
+   子进程。两个职责：
+   a) 活体快照：每 DUMP_INTERVAL 秒对 GUI 进程做一次外部
+      MiniDumpWriteDump（进程外调用，不依赖目标进程内任何状态；
+      dump 落 data/logs/dumps/snap-<pid>-<seq>.dmp）。A 形态崩溃
+      的 C 栈缺位问题由此兜底：崩溃前的最后一次快照 + 崩溃时刻
+      faulthandler Python 栈 + 秒级死亡时间戳 = 完整取证链。
+      快照只保留最近 KEEP 份（MiniDumpNormal 级别 ~几 MB，循环覆盖）。
+   b) 死亡标记：WaitForSingleObject 感知 GUI 终止 → 秒级时间戳写
+      crash.log（正常退出经 atexit stop 文件静默，不误报）。
 """
 from __future__ import annotations
 
@@ -24,6 +28,10 @@ import os
 import sys
 
 log = logging.getLogger(__name__)
+
+DUMP_INTERVAL = 30      # 活体快照间隔（秒）
+SNAPSHOT_KEEP = 3       # 快照循环保留份数
+
 
 if sys.platform == "win32":
     import ctypes.wintypes as wt
@@ -35,30 +43,76 @@ if sys.platform == "win32":
                     ("wYear", "wMonth", "wDayOfWeek", "wDay",
                      "wHour", "wMinute", "wSecond", "wMilliseconds")]
 
+    PROCESS_VM_READ = 0x0010
+    PROCESS_QUERY_INFORMATION = 0x0400
+    # MiniDumpNormal|WithProcessThreadData|WithUnloadedModules|
+    # WithFullThreadInfo —— 全线程栈可回溯。**不含** WithHandleData：
+    # 实测 GUI 进程句柄数据会把快照从 0.4MB 撑到 100MB+
+    # （v7.2.10 修订三实机验证），循环保留 3 份会吃满便携用户磁盘。
+    _DUMP_FLAGS = (0x00000000 | 0x00000001 | 0x00000004 |
+                   0x00000020)
+
 
 def install() -> None:
     """注册看门狗（幂等；仅 frozen GUI 进程实际起子进程）。
 
     由 crashguard.install 在 faulthandler.enable 之后调用。
-    进程内 VEH/SEH 钩子已在 v7.2.10 修订二全部移除（见模块 docstring）。
     """
     if sys.platform != "win32":
         return
     _spawn_watchdog()
 
 
-def watchdog_main(gui_pid: int) -> int:
-    """--watchdog 模式入口：监控父 GUI 进程，死亡时记录精确时刻。
+def _snapshot(gui_pid: int, dump_dir: str) -> bool:
+    """对存活 GUI 进程做外部 minidump（一次；失败不重试不抛错）。"""
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        dbg = ctypes.WinDLL("dbghelp", use_last_error=True)
+        dbg.MiniDumpWriteDump.restype = wt.BOOL
+        dbg.MiniDumpWriteDump.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+            ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_void_p]
+        h = k32.OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
+                            False, gui_pid)
+        if not h:
+            return False
+        try:
+            path = os.path.join(dump_dir, "snap.dmp.tmp")
+            h_file = k32.CreateFileW(path, 0x40000000, 0, None, 2,
+                                     0x80, None)
+            if h_file in (None, 0, -1, 0xFFFFFFFFFFFFFFFF):
+                return False
+            try:
+                ok = dbg.MiniDumpWriteDump(h, gui_pid, h_file,
+                                           _DUMP_FLAGS, None, None, None)
+            finally:
+                k32.CloseHandle(h_file)
+            if not ok:
+                return False
+            # 快照循环保留：snap.dmp.tmp → snap-<n>.dmp（n 循环 0..KEEP-1）
+            seq = getattr(_snapshot, "_seq", -1) + 1
+            _snapshot._seq = seq
+            final = os.path.join(dump_dir, f"snap-{seq % SNAPSHOT_KEEP}.dmp")
+            os.replace(path, final)
+            return True
+        finally:
+            k32.CloseHandle(h)
+    except Exception:  # noqa: BLE001 —— 快照失败不影响看门狗本职
+        return False
 
-    由 install() spawn。循环 WaitForSingleObject(2s)：
-    - GUI 终止（rc==0）→ 异常死亡标记写 crash.log（秒级时间戳，
-      供对窗提取 WER 报告）；正常关闭路径 GUI 的 atexit 会先写
-      stop 文件，watchdog 看到即自杀，不会误报。
-    - WAIT_TIMEOUT → 查 stop 文件。返回 0。
+
+def watchdog_main(gui_pid: int) -> int:
+    """--watchdog 模式入口：活体快照 + 监控 GUI 死亡记录精确时刻。
+
+    循环 WaitForSingleObject(2s)：
+    - WAIT_OBJECT_0（GUI 终止）→ 异常死亡标记写 crash.log（正常关闭
+      路径 GUI 的 atexit 已先写 stop 文件，watchdog 见到即自杀）。
+    - WAIT_TIMEOUT → 每满 DUMP_INTERVAL 做一次活体快照。
+    返回 0。
     """
     if sys.platform != "win32":
         return 0
-    import time as _time
 
     k32 = ctypes.windll.kernel32
     SYNCHRONIZE = 0x00100000
@@ -68,12 +122,17 @@ def watchdog_main(gui_pid: int) -> int:
     if not h:
         return 0          # 拿不到句柄（权限/已死）：无从监控
     try:
+        from .core.storage import data_dir
+        dump_dir = data_dir() / "logs" / "dumps"
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        dump_dir_s = str(dump_dir)
+        import time as _time
+        last_snap = 0.0
         while True:
             rc = k32.WaitForSingleObject(h, 2000)
             if rc == 0:            # WAIT_OBJECT_0：GUI 进程已终止
                 # bootlifetime 正常关闭时 install() 已调用 _stop_watchdog
                 # （watchdog 收到退出指令）；这里只处理异常死亡：
-                from .core.storage import data_dir
                 st = _SYSTEMTIME()
                 k32.GetLocalTime(ctypes.byref(st))
                 line = (f"[{st.wYear:04d}-{st.wMonth:02d}-{st.wDay:02d} "
@@ -81,9 +140,7 @@ def watchdog_main(gui_pid: int) -> int:
                         f"watchdog: GUI 进程 pid={gui_pid} 异常终止"
                         f"（此刻起 5 秒内 WER 事件即对应崩溃现场）\n")
                 try:
-                    d = data_dir() / "logs"
-                    d.mkdir(parents=True, exist_ok=True)
-                    with open(d / "crash.log", "a",
+                    with open(dump_dir.parent / "crash.log", "a",
                               encoding="utf-8", buffering=1) as f:
                         f.write(line)
                 except OSError:
@@ -91,9 +148,7 @@ def watchdog_main(gui_pid: int) -> int:
                 return 0
             if rc != 0x102:        # 非 WAIT_TIMEOUT：句柄失效（GUI 已死）
                 return 0
-            # WAIT_TIMEOUT：GUI 活着。正常退出路径（closeEvent → 进程退出）
-                # 由 Python atexit 调 _stop_watchdog 置位标志——watchdog
-                # 进程读取该标志后自杀。标志通过临时文件传递（简单可靠）。
+            # WAIT_TIMEOUT：GUI 活着
             _stop = os.environ.get("SP_WATCHDOG_STOP_FILE")
             if _stop and os.path.exists(_stop):
                 try:
@@ -101,6 +156,10 @@ def watchdog_main(gui_pid: int) -> int:
                 except OSError:
                     pass
                 return 0
+            now = _time.monotonic()
+            if now - last_snap >= DUMP_INTERVAL:
+                last_snap = now
+                _snapshot(gui_pid, dump_dir_s)
     finally:
         k32.CloseHandle(h)
 

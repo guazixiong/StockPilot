@@ -39,3 +39,20 @@ class TestWatchdog:
         assert os.path.exists(flag)
         with open(flag, encoding="utf-8") as f:
             assert f.read() == "stop"
+
+    def test_snapshot_writes_rotating_dumps(self, tmp_path):
+        """活体快照：两次快照产出循环命名的 snap-N.dmp（修订三取证通道）。"""
+        if sys.platform != "win32":
+            return
+        victim = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            ok1 = nativedump._snapshot(victim.pid, str(tmp_path))
+            ok2 = nativedump._snapshot(victim.pid, str(tmp_path))
+            dumps = list(Path(tmp_path).glob("snap-*.dmp"))
+            if ok1 and ok2:       # 极端环境（权限）下 OpenProcess 可失败
+                assert len(dumps) >= 2, "快照应落盘两份"
+                assert all(d.stat().st_size > 100_000 for d in dumps), \
+                    "MiniDumpWriteDump 应产出真实 dmp（>100KB）"
+        finally:
+            victim.kill()

@@ -36,7 +36,13 @@ class Worker(QRunnable):
             self.signals.err.connect(on_err)
         if on_progress is not None:
             self.signals.progress.connect(on_progress)
-        self.setAutoDelete(True)
+        self.setAutoDelete(False)
+        # autoDelete=False（v7.2.10）：QThreadPool 在 run() 后立即 delete
+        # C++ QRunnable，而 Python 包装器对象仍存活，GC 再释放同一指针
+        # = 双重释放 → 延迟性随机 0xC0000005（崩溃时主线程在 app.exec
+        # 空闲 + 一个无 Python 栈的 QThreadPool 管理线程，A 形态取证
+        # 指向 QThread::start/QThreadPoolPrivate::reset）。对象生命周期
+        # 完全交给 Python GC。
 
     def run(self) -> None:  # pragma: no cover Qt 线程
         try:
