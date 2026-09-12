@@ -20,6 +20,7 @@ import time
 from typing import Optional
 
 _last_popup: dict = {}      # key -> ts（弹窗节流）
+_popup_open = False         # 模态弹窗防重入（错误风暴下嵌套 exec 是崩溃现场）
 
 
 def show_error(parent, title: str, msg: str, *,
@@ -28,17 +29,29 @@ def show_error(parent, title: str, msg: str, *,
 
     parent: 弹窗宿主（页面/窗口）；msg 任意长度——弹窗内自然换行，
     不影响任何页面布局。同键 dedup_sec 内不重复弹。
+
+    v7.2.10：网络故障风暴下各页面 on_err 排队涌入主线程，若在已开的
+    模态弹窗（QMessageBox.exec 的嵌套事件循环）里再创建第二个弹窗，
+    模态循环会层层嵌套（v7.2.10 崩溃栈：err.py → home._on_scan_err →
+    err.py → boards._on_boards_err）。已有弹窗未关时直接丢弃后续弹窗：
+    无人值守场景用户本就看不到第 N 层弹窗，失败明细已进 app.log。
     """
+    global _popup_open
     key = f"{title}|{str(msg)[:80]}"
     now = time.time()
     if now - _last_popup.get(key, 0.0) < dedup_sec:
         return
+    if _popup_open:
+        return
     _last_popup[key] = now
+    _popup_open = True
     try:
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.warning(parent, title, str(msg))
     except Exception:  # noqa: BLE001 无 GUI 环境（测试）静默
         pass
+    finally:
+        _popup_open = False
 
 
 def fail_hint(label, short: str, max_len: int = 20) -> None:

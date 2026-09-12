@@ -102,9 +102,16 @@ def smoke() -> int:
 def app_main() -> None:
     parser = argparse.ArgumentParser(prog="StockPilot", description=APP_NAME)
     parser.add_argument("--smoke", action="store_true", help="运行自检后退出")
+    parser.add_argument("--watchdog", type=int, metavar="PID",
+                        help=argparse.SUPPRESS)   # 内部：崩溃取证看门狗
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args()
     setup_logging()
+
+    if args.watchdog:
+        # 看门狗模式：不装防线不进 GUI，只观察父进程并记录异常死亡时刻
+        from .nativedump import watchdog_main
+        sys.exit(watchdog_main(args.watchdog))
 
     from .crashguard import install as install_crashguard
     install_crashguard()          # 闪退防线：未捕获异常/Qt fatal 全部落 crash.log

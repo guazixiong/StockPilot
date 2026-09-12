@@ -13,7 +13,7 @@ import stockpilot
 def test_version_matches_changelog_head():
     """__version__ 必须不落后于 git log 最新版本的语义（解析 vN.N.N 提交）。"""
     # 直接锚定当前交付版本：改版本时同步更新此常量
-    assert stockpilot.__version__ == "7.2.9", (
+    assert stockpilot.__version__ == "7.2.10", (
         "版本号未随交付更新：窗口标题会误导用户以为更新未生效")
 
 

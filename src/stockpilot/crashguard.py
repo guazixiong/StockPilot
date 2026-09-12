@@ -89,7 +89,15 @@ def _py_hook(tp, val, tb) -> None:
                     f"崩溃详情已写入 crash.log。点 OK 后程序可能继续运行或退出。")
     except Exception:  # noqa: BLE001
         pass
-    _orig_py_hook(tp, val, tb)
+    # v7.2.10：重入保护。reload/重复安装链上 _orig_py_hook 可能指向
+    # 旧实例的 _py_hook——不同函数对象，`is not` 判不出（测试实测
+    # RecursionError 无限刷屏）。用栈深兜底：钩子递归超过 2 层必然
+    # 是自递归链，直接断链。
+    import inspect as _inspect
+    if len([f for f in _inspect.stack()
+            if f.function == "_py_hook"]) <= 2:
+        if _orig_py_hook is not None and _orig_py_hook is not _py_hook:
+            _orig_py_hook(tp, val, tb)
 
 
 def _thread_hook(args) -> None:
@@ -140,6 +148,16 @@ def install() -> None:
     except Exception:  # noqa: BLE001 —— 无盘可写时不能拖垮启动
         log.warning("faulthandler 落盘启用失败（继续运行，无 native 栈）",
                     exc_info=True)
+    # v7.2.10 第五道防线：外部看门狗——exe 起第二个进程监控 GUI，
+    # 死亡时刻写入 crash.log（供对窗提取 WER 报告拿 C 栈模块+偏移）。
+    # 进程内 VEH/SEH 钩子已全部移除（v7.2.10 修订二）：真崩溃现场
+    # ctypes 回调不可达且疑似干扰 WER 分发（v7.2.10 三次真崩溃
+    # marker=0 且 ReportArchive 无新条目，v7.2.9 时代正常生成）。
+    try:
+        from . import nativedump
+        nativedump.install()
+    except Exception:  # noqa: BLE001
+        log.warning("看门狗防线启用失败（继续运行）", exc_info=True)
     try:
         from PySide6.QtCore import qInstallMessageHandler
         qInstallMessageHandler(_qt_msg_handler)
